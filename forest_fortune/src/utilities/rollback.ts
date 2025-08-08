@@ -1,30 +1,17 @@
-import { updateRollback } from "../db/db";
 import { sendToQueue } from "./amqp";
-import { postBetTxn, rollBackTransaction } from "./common";
+import { rollBackTransaction } from "./common";
+import { updateRollback } from "./db-queries";
 import { logError, logRollback } from "./logger";
 import { deleteHashField, getAllBetHash, getHashField } from "./redis-connecton";
-import { generateUUIDv7 } from "./uuid";
-
-interface RollbackData {
-  betAmount: number | string;
-  ip: string;
-  game_id: string;
-  userId: string;
-  txn_id: string;
-  token: string;
-  socket_id: string;
-  matchId: string;
-  operatorId: string;
-}
 
 interface ProcessItemResult {
   status: boolean;
   item: string;
+  msg?: string;
 }
 
 export const ROLLBACK_CHUNK_SIZE = 10;
 export const ROLLBACK_RETRY_DELAY_MS = 10000;
-const FIXED_NUM = 2;
 export async function checkForRollBack(): Promise<string> {
   try {
     const keys = await getAllBetHash('BT:*');
@@ -50,7 +37,10 @@ async function processInChunksWithRetry(data: string[], chunkSize = ROLLBACK_CHU
     for (const result of results) {
       if (result.status) {
         await deleteHashField(result.item);
-      } else {
+      }else if (result?.status === false && result?.msg == "Transaction not found") {
+                await deleteHashField(result.item);
+            }
+  else {
         failedKeys.push(result.item);
       }
     }
@@ -80,8 +70,8 @@ async function processItem(item: string): Promise<ProcessItemResult> {
         ip: values.ip,
         game_id: values.game_id,
         user_id: values.userId,
-        txn_ref_id: values.txn_id,
-        description: `${values.winAmount} Credited (Server Restart) for Spin Strike Game for Round Id ${values.matchId}`,
+        txn_ref_id: values.debitTxnId,
+        description: `${values.winAmount} Credited (Server Restart) for Forest Arrow Game for Round Id ${values.matchId}`,
         txn_type: 1,
       };
 
@@ -91,11 +81,11 @@ async function processItem(item: string): Promise<ProcessItemResult> {
         JSON.stringify({ ...webHookData, operatorId: values.operatorId, token: values.token })
       );
 
-      return { status: true, item };
+      return { status: true, item ,};
     }
 
     const userRollBack = await rollBackTransaction({
-      txn_id: values.txn_id,
+      txn_id: values.debitTxnId,
       betAmount: values.betAmount,
       userId: decodeURIComponent(values.userId),
       matchId: values.matchId,
@@ -103,16 +93,16 @@ async function processItem(item: string): Promise<ProcessItemResult> {
 
     if (userRollBack && userRollBack.response?.status === true) {
       await updateRollback({
-        betTransactionId: values.txn_id,
+        betTransactionId: values.debitTxnId,
         userId: values.userId,
         matchId: values.matchId,
         resultStatus: 'rollback',
       });
-      return { status: true, item };
+      return { status: userRollBack?.response?.status, item , msg:userRollBack?.response?.msg};
     }
 
     await logRollback('Rollback failed', { item, userRollBack });
-    return { status: false, item };
+    return { status: userRollBack?.response?.status, item , msg:userRollBack?.response?.msg};
   } catch (error) {
     void logError('Error in processItem', { item, error });
     return { status: false, item };

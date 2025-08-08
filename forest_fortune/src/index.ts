@@ -20,6 +20,8 @@ const io = new SocketIO(server, {
   },
   pingInterval: 1000, // Ping every 1 seconds
   pingTimeout: 1000,
+  path: "/socket.io",
+  transports: ["websocket", "polling"],
 });
 
 // Middleware
@@ -27,7 +29,7 @@ app.use(cors({ origin: config.FRONTEND_URL }));
 app.use(express.json());
 
 // Routes
-app.use('/api', userRoutes);
+app.use('/routes', userRoutes);
 
 
 

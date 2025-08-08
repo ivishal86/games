@@ -26,6 +26,9 @@ export const fetchAndCacheUser = async (token: string, socket: Socket, io: Serve
       gameId
     };
 
+    if (!redisClient) {
+      throw new Error('Redis client is not initialized');
+    }
     await redisClient.hset(redisKey, redisData);
     await redisClient.expire(redisKey, 3600);  
     console.log('User Data saved in redis--',redisData)

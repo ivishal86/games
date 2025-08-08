@@ -16,6 +16,11 @@ export interface SocketMessage {
   eventName: string;
   data: BetPayload;
 }
+export interface BetRequest {
+  webhookData:DebitObj,
+  token:string,
+  socketId:string
+}
 
 export interface DebitObj {
   amount: string;
@@ -43,12 +48,15 @@ export interface CreditObj {
 }
 
 export interface BetObj {
+  gameId:string;
   matchId: string;
+  ip:string;
   multiplier: number[];
   betAmount: number;
   debitTxnId: string;
   result?: 'win' | 'lose' | 'rollback';
   winAmount?: number;
+  creditTxnId:string;
   // game_id,  
   //  user_id: actualUserId, 
   // userId: encodedUserId,                                                                             
@@ -66,7 +74,6 @@ export interface GameResult {
   result: ResultEnum;
   winAmount: number;
   updatedBalance: number;
-  creditTxnId: string | null;
 }
 
 export interface BetAttributes {
@@ -91,4 +98,17 @@ export interface PostBetTxnData {
   webhookData: DebitObj,
   token: string,
   socketId?: string,
+}
+
+export interface RollbackUpdateInput {
+  betTransactionId: string;
+  userId: string;
+  matchId: string;
+  resultStatus: string;
+}
+
+export interface ResultRequest {
+  webhookData:CreditObj,
+  token:string,
+  operatorId:string
 }

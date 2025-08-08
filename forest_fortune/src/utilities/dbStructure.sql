@@ -1,0 +1,41 @@
+`CREATE TABLE `forestfortune_games`.`bet` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  userId VARCHAR(255),
+  betId VARCHAR(255),
+  matchId VARCHAR(255),
+  operatorId VARCHAR(255),
+  betAmount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  betData TEXT DEFAULT NULL,
+  betStatus VARCHAR(255) DEFAULT 'pending',
+  betRequest TEXT,
+  BetResponse TEXT,
+  betTxnId VARCHAR(255),
+  isDeclared TINYINT(1),
+  result TEXT,
+  resultStatus VARCHAR(255),
+  resultRequest TEXT,
+  resultTxnId VARCHAR(255),
+  winAmount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+`
+
+`ALTER TABLE `forestfortune_games`.`bet` 
+ADD INDEX `idx_betId` (`betId` ASC) INVISIBLE,
+ADD INDEX `idx_matchId` (`matchId` ASC) INVISIBLE,
+ADD INDEX `idx_userId` (`userId` ASC) INVISIBLE,
+ADD INDEX `idx_operatorId` (`operatorId` ASC) VISIBLE,
+ADD INDEX `idx_betAmount` (`betAmount` ASC) INVISIBLE,
+ADD INDEX `idx_betData` (`betData` (150)) INVISIBLE,
+ADD INDEX `idx_betStatus` (`betStatus` ASC) INVISIBLE,
+ADD INDEX `idx_betRequest` (`betRequest` (150)) INVISIBLE,
+ADD INDEX `idx_betResponse` (`BetResponse` (150)) INVISIBLE,
+ADD INDEX `idx_betTxnId` (`betTxnId` ASC) INVISIBLE,
+ADD INDEX `idx_isDeclared` (`isDeclared` ASC) INVISIBLE,
+ADD INDEX `idx_resultStatus` (`resultStatus` ASC) INVISIBLE,
+ADD INDEX `idx_resultRequest` (`resultRequest` (150)) INVISIBLE,
+ADD INDEX `idx_resultTxnId` (`resultTxnId` ASC) INVISIBLE,
+ADD INDEX `idx_result` (`result` (150)) INVISIBLE,
+ADD INDEX `idx_winAmount` (`winAmount` ASC) INVISIBLE,
+ADD INDEX `idx_createdAt` (`createdAt` ASC) VISIBLE;`

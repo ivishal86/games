@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { fetchMatchHistoryFromDB, getUserHistoryFromDB } from '../../db/db';
 import { BetObj } from '../../interface';
 import { StatusCodes } from 'http-status-codes';
 import { MatchHistoryRow } from '../../interface/forestFortune.interface';
 import { calculateAverageMultiplier } from '../../utilities/helper';
 import { logError } from '../../utilities/logger';
+import { fetchMatchHistoryFromDB, getUserHistoryFromDB } from '../../utilities/db-queries';
 
 export async function getMatchHistory(req: Request, res: Response): Promise<void> {
   const { user_id, operator_id, lobby_id } = req.query;

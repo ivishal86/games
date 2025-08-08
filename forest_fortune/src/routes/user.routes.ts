@@ -6,6 +6,6 @@ const router = Router();
 router.get('/',(req, res)=>{
     res.send("working")
 })
-router.get('/match-history', getMatchHistory);
-router.get('/user-bet-history', validateUserHeaders, getUserBetHistory);
+router.get('/single-match-history', getMatchHistory);
+router.get('/my-bets', validateUserHeaders, getUserBetHistory);
 export default router;

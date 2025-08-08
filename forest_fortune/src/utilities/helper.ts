@@ -1,20 +1,29 @@
 import { v7 as uuidv7 } from 'uuid';
 import { ResultEnum } from '../enum/result.enum';
-import { MULTIPLIERS, RiskLevel } from '../enum/forestFortune.enum';
-import { ArrowGameResponse, ArrowResult, BetPayload } from '../interface/forestFortune.interface';
-import { BetObj, DebitObj, GameResult } from '../interface';
+import { gameMultipliers, MULTIPLIERS, RiskLevel } from '../enum/forestFortune.enum';
+import { ArrowGameResponse, ArrowResult, BetData, BetPayload } from '../interface/forestFortune.interface';
+import { BetObj, BetRequest, DebitObj, GameResult, ResultRequest } from '../interface';
 import { Socket } from 'socket.io';
 import { emitError, emitSocketMessage } from '../routes/event.routes';
 import { logError } from './logger';
-import { createCreditObject, processWinTransaction, saveBetToDB, updateBetResult, updateUserBalance } from './common';
+import { createCreditObject, processWinTransaction, updateUserBalance } from './common';
 import { EVENT_TYPES } from '../socket/events';
 import config from '../config/config';
-import { redisClient, setHashField } from './redis-connecton';
+import { getRedisClient, redisClient, setHashField } from './redis-connecton';
+import { saveBetToDB, updateBetResult } from './db-queries';
 
 export const DECIMALS = 2;
+// export function getMultipliers(risk: RiskLevel, count: number): number[] {
+//   const options = MULTIPLIERS[risk];
+//   return Array.from({ length: count }, () => options[Math.floor(Math.random() * options.length)]);
+// }
+
 export function getMultipliers(risk: RiskLevel, count: number): number[] {
-  const options = MULTIPLIERS[risk];
-  return Array.from({ length: count }, () => options[Math.floor(Math.random() * options.length)]);
+  const tiers = MULTIPLIERS[risk]; // tiers: number[][]
+  return Array.from({ length: count }, () => {
+    const tier = tiers[Math.floor(Math.random() * tiers.length)];
+    return tier[Math.floor(Math.random() * tier.length)];
+  });
 }
 
 
@@ -54,17 +63,16 @@ export async function calculateArrowGameResult(
   }
 
   const result = winAmount > 0 ? ResultEnum.win : ResultEnum.lose;
-  const creditTxnId = winAmount > 0 ? uuidv7() : null;
 
   // Final Redis update
+  const redisClient = getRedisClient()
   await redisClient.hset(redisKey, { balance: String(runningBalance) });
   void updateUserBalance(socket, runningBalance); // async balance update internally
 
   return {
     result,
     winAmount,
-    updatedBalance: runningBalance,
-    creditTxnId,
+    updatedBalance: Number(runningBalance.toFixed(DECIMALS)),
     arrowResults
   };
 }
@@ -94,11 +102,12 @@ export function formatArrowGameResponse(
 
 
 export function validateArrowGameData(socket: Socket, data: BetPayload): boolean {
+  if (socket.data.userInfo.balance < data.betAmount) return emitValidationError(socket, `Insufficient Balance`);
   if (
     !validateFieldPresence(socket, data, ['betAmount', 'risk', 'arrowsAmount', 'betPerArrow']) ||
     !validateNumberRange(socket, 'betAmount', data.betAmount, Number(config.bet.MIN_BET), Number(config.bet.MAX_BET)) ||
     !validateRiskLevel(socket, data.risk) ||
-    !validateNumberRange(socket, 'arrowsAmount', data.arrowsAmount, Number(config.bet.MIN_ARROWS), Number(config.bet.MAX_ARROWS)) ||
+    !validateArrowRange(socket, 'arrowsAmount', data.arrowsAmount, Number(config.bet.MIN_ARROWS), Number(config.bet.MAX_ARROWS)) ||
     !validateBetPerArrow(socket, data.betPerArrow)
   ) {
     return false;
@@ -107,7 +116,7 @@ export function validateArrowGameData(socket: Socket, data: BetPayload): boolean
   return true;
 }
 
-function emitValidationError(socket: Socket, message: string): false {
+export function emitValidationError(socket: Socket, message: string): false {
   emitError(socket, message);
   return false;
 }
@@ -125,12 +134,34 @@ function validateNumberRange(socket: Socket, fieldName: string, value: number, m
   if (typeof value !== 'number') {
     return emitValidationError(socket, `${fieldName} must be a number`);
   }
+  // if (socket.data.userInfo.balance < min) return emitValidationError(socket, `Insufficient Balance`);
+  if(value < min){
+    return emitValidationError(socket, `Invalid bet amount (Min: ${min})`);
+  }
+  if(value > max){
+    return emitValidationError(socket, `Invalid bet amount (Max: ${max})`);
+  }
   if (value < min || value > max) {
     return emitValidationError(socket, `${fieldName} must be between ${min} and ${max}`);
   }
   return true;
 }
-
+function validateArrowRange(socket: Socket, fieldName: string, value: number, min: number, max: number): boolean {
+  if (typeof value !== 'number') {
+    return emitValidationError(socket, `${fieldName} must be a number`);
+  }
+  // if (socket.data.userInfo.balance < min) return emitValidationError(socket, `Insufficient Balance`);
+  if(value < min){
+    return emitValidationError(socket, `Invalid Arrow Count (Min: ${min})`);
+  }
+  if(value > max){
+    return emitValidationError(socket, `Invalid Arrow Count (Max: ${max})`);
+  }
+  if (value < min || value > max) {
+    return emitValidationError(socket, `${fieldName} must be between ${min} and ${max}`);
+  }
+  return true;
+}
 function validateRiskLevel(socket: Socket, risk: RiskLevel): boolean {
   if (typeof risk !== 'number') {
     return emitValidationError(socket, 'risk must be a number');
@@ -155,7 +186,7 @@ function validateBetPerArrow(socket: Socket, betPerArrow: string): boolean {
 }
 export function getGameConfig(): Record<number, number[]> {
   return {
-    [RiskLevel.EASY]: MULTIPLIERS[RiskLevel.EASY]
+    [RiskLevel.EASY]: gameMultipliers[RiskLevel.EASY]
   };
 }
 
@@ -171,7 +202,7 @@ export function handleDifficultyChange(socket: Socket, data: { risk: unknown }):
     return;
   }
 
-  const multipliers = MULTIPLIERS[numericRisk as RiskLevel];
+  const multipliers = gameMultipliers[numericRisk as RiskLevel];
 
   emitSocketMessage({
     socket,
@@ -185,17 +216,31 @@ export function handleDifficultyChange(socket: Socket, data: { risk: unknown }):
 
 export function calculateAverageMultiplier(betData: BetObj): string {
   try {
-    const multipliers: number[] = Array.isArray(betData?.multiplier)
-      ? betData.multiplier.map(Number)
-      : [];
+    if (!Array.isArray(betData) || betData.length === 0) return '0';
 
-    if (multipliers.length === 0) return '0';
-
+    const multipliers: number[] = betData.map(bet => Number(bet.multiplier));
     const sum = multipliers.reduce((acc, val) => acc + val, 0);
-    const avg = sum / multipliers.length;
+    const avg = sum 
 
     const formatted =
-      Number.isInteger(avg) ? `${avg}` : `${avg.toFixed(DECIMALS).replace(/\.?0+$/, '')}`;
+      Number.isInteger(avg) ? `${avg}` : `${avg.toFixed(2).replace(/\.?0+$/, '')}`;
+
+    return formatted;
+  } catch {
+    return '0';
+  }
+}
+
+export function calculateAverageMultipliers(betAmount: number, winAmount:number): string {
+  try {
+    // if (!Array.isArray(betData) || betData.length === 0) return '0';
+
+    // const betAmounts: number[] = betData.map(bet => Number(bet.betAmount));
+    // const sum = betAmounts.reduce((acc, val) => acc + val, 0);
+    let avg = winAmount / betAmount
+
+    const formatted =
+      Number.isInteger(avg) ? `${avg}` : `${avg.toFixed(3).replace(/\.?0+$/, '')}`;
 
     return formatted;
   } catch {
@@ -208,6 +253,7 @@ export function getBetRedisKey(socket: Socket, matchId: string): string {
 }
 
 export async function getUserFromRedis(socket: Socket, matchId: string): Promise<Record<string, string> | null> {
+  const redisClient = getRedisClient()
   const user = await redisClient.hgetall(`user:${socket.data.userInfo.user_id}:${socket.data.userInfo.operatorId}`);
   if (!user || !user.userId || !user.balance) {
     void logError('User data not found in Redis', { matchId, socketId: socket.id });
@@ -217,76 +263,138 @@ export async function getUserFromRedis(socket: Socket, matchId: string): Promise
   return user;
 }
 
-export function buildBetData(matchId: string, multiplier: number[], betAmount: number): BetObj {
+export function buildBetData(socket:Socket,matchId: string, multiplier: number[], betAmount: number,gameId:string): BetObj {
   return {
+    gameId,
     matchId,
     multiplier,
     betAmount,
     debitTxnId: uuidv7(),
     result: ResultEnum.lose,
-    winAmount: 0
+    winAmount: 0,
+    creditTxnId:uuidv7(),
+    ip:socket.handshake.address || 'unknown'
   };
 }
 
 export async function cacheBetToRedis(redisKey: string, betData: BetObj, socket: Socket, user:Record<string, string>): Promise<void> {
   const redisData: Record<string, string> = {
     matchId: betData.matchId,
+    game_id:betData.gameId,
     betAmount: String(betData.betAmount),
     debitTxnId: betData.debitTxnId,
-    winAmount: String(betData.winAmount),
+    // winAmount: String(betData.winAmount),
     ip: socket.handshake.address,
-    userId:user.user_id,
+    userId:user.userId,
     operatorId:user.operatorId
   };
   await setHashField(redisKey, redisData);
 }
 
-export async function saveInitialBetToDB(socket: Socket, matchId: string, debitObj: DebitObj, betData: BetObj): Promise<void> {
+export async function saveInitialBetToDB(socket: Socket, matchId: string, debitObj: DebitObj,betRequest:BetRequest, betObj: BetObj): Promise<void> {
   await saveBetToDB({
     userId: decodeURIComponent(socket.data.userInfo.user_id),
     betId: debitObj.bet_id,
     matchId,
     operatorId: socket.data.userInfo.operatorId,
-    betAmount: betData.betAmount,
-    betData,
-    betStatus: 'pending',
-    betRequest: debitObj,
-    betTxnId: betData.debitTxnId,
+    betAmount: betObj.betAmount,
+    // betData,
+    // betStatus: 'pending',
+    betRequest,
+    betTxnId: betObj.debitTxnId,
     isDeclared: false,
     resultStatus: ResultEnum.lose
   });
 }
 
 export async function handleBetResult(
-  result: ResultEnum,
+  resultEnum: ResultEnum,
   winAmount: number,
   creditTxnId: string | null,
-  betData: BetObj,
+  betData:BetData[],
+  betObj: BetObj,
   debitObj: DebitObj,
   socket: Socket,
+  result:ArrowResultForDb[],
   token: string,
   matchId: string,
-  msg: string
+  msg: string,
+  user:Record<string,string>
 ): Promise<void> {
-  if (result === ResultEnum.win && winAmount > 0 && creditTxnId) {
-    const creditObj = createCreditObject(winAmount, creditTxnId, socket, matchId, betData.debitTxnId);
+  if (resultEnum === ResultEnum.win && winAmount > 0 && creditTxnId) {
+    const creditObj = createCreditObject(winAmount, creditTxnId, socket, matchId, betObj.debitTxnId);
+    const resultRequest : ResultRequest={
+      webhookData:creditObj,
+      token,
+      operatorId:user.operatorId
+    }
     await updateBetResult({
       betId: debitObj.bet_id,
+      betTxnId:debitObj.txn_id,
+      userId:user.userId,
+      matchId,
+      betData,
+      betObj,
       betResponse: msg,
-      betStatus: 'completed',
+      betStatus: 'success',
       isDeclared: true,
-      result: creditObj,
+      result,
+      resultRequest,
       resultStatus: ResultEnum.win,
       resultTxnId: creditTxnId,
       winAmount
-    });
+    },'win');
     await processWinTransaction(creditObj, socket, token, matchId);
   } else {
     await updateBetResult({
       betId: debitObj.bet_id,
+      betTxnId:debitObj.txn_id,
+      userId:user.userId,
+      matchId,
+      betData,
+      betObj,
+      result,
       betResponse: msg,
-      betStatus: 'completed',
+      betStatus: 'success',
       isDeclared: true
-    });
+    },'lose');
   }
+}
+
+export type ArrowResultForDb = {
+  coeff: string;     // Multiplier as string
+  winAmount: string; // Not needed here but part of original object
+};
+
+type UserBetData = {
+  betAmount: number;
+  risk: number;
+  arrowsAmount: number;
+  betPerArrow: string;
+};
+
+// type ArrowBetResult = {
+//   arrowNumber: number;
+//   betAmount: number;
+//   multiplier: number;
+//   payout: number;
+// };
+
+export function buildBetDataDb(
+  betData: UserBetData,
+  arrowsResultPositions: ArrowResultForDb[]
+): BetData[] {
+  const perArrowBet = Number(betData.betPerArrow);
+
+  return arrowsResultPositions.slice(0, betData.arrowsAmount).map((result, index) => {
+    const multiplier = parseFloat(result.coeff);
+    const payout = +(perArrowBet * multiplier).toFixed(2);
+
+    return {
+      arrowNumber: index + 1,
+      betAmount: perArrowBet,
+      multiplier,
+      payout,
+    };
+  });
 }

@@ -8,11 +8,14 @@ export const EVENT_TYPES = {
   THROW_ARROW: 'THROW_ARROW',
   gameService: 'gameService',
   DIFFICULTY_CHANGE: 'DIFFICULTY_CHANGE',
+  join_game : 'join_game',
   // Outgoing events from server
   SPIN_RESULT: 'SPIN_RESULT',
+  joined:"joined",
   info: 'info',
   Error: 'Error',
   GAME_CONFIG: 'GAME_CONFIG',
+  useranotherwindow:'useranotherwindow'
 } as const;
 
 export type IncomingEventType =
@@ -25,4 +28,5 @@ export type OutgoingEventType =
   | typeof EVENT_TYPES.info
   | typeof EVENT_TYPES.Error
   | typeof EVENT_TYPES.GAME_CONFIG
-  | typeof EVENT_TYPES.DIFFICULTY_CHANGE;
+  | typeof EVENT_TYPES.DIFFICULTY_CHANGE
+  | typeof EVENT_TYPES.useranotherwindow;

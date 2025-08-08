@@ -4,15 +4,15 @@ import { DebitObj, DebitData, CreditObj, BetObj, User, PostBetTxnData } from '..
 import { logInfo, logError, logRedis, logCashout, logBet, logThirtParty, logFailedThirtParty } from '../utilities/logger';
 import { Server, Socket } from 'socket.io';
 import { ResultEnum } from '../enum/result.enum';
-import { insertBet, pool } from '../db/db';
-import { emitSocketMessage } from '../routes/event.routes';
+import { emitError, emitSocketMessage } from '../routes/event.routes';
 import { EVENT_TYPES } from '../socket/events';
 import { sendToQueue } from './amqp';
 import { ArrowGameResponse } from '../interface/forestFortune.interface';
-import { redisClient } from './redis-connecton';
+import { getRedisClient, redisClient } from './redis-connecton';
+import { insertBet } from './db-queries';
 
-export async function postBetTxn( data:PostBetTxnData): Promise<DebitData> {
-  const {webhookData,token,socketId} = data;
+export async function postBetTxn(data: PostBetTxnData,socket:Socket): Promise<DebitData> {
+  const { webhookData, token, socketId } = data;
   try {
     const response = await axios.post(
       `${config.SERVICE_BASE_URL}/service/operator/user/balance/v2`,
@@ -29,14 +29,18 @@ export async function postBetTxn( data:PostBetTxnData): Promise<DebitData> {
       userId: webhookData.user_id,
       response: response.data,
     });
-    
+
     return response.data;
-  } catch (error: unknown) {
+  } catch (error: any) {
+    console.log("debit error:",error.response?.data?.msg,)
     void logError('Unhandled error posting debit transaction', {
       txnId: webhookData.txn_id,
-      error,
+      errorMsg: error.response?.data
     });
-    throw error;
+    // emitError(socket,"Bet Transaction Cancelled by Upstream")
+    throw new Error(
+      error.response?.data?.msg || 'Failed to fetch user details from API'
+    );
   }
 }
 
@@ -48,7 +52,7 @@ const CREDIT_TXN_TYPE = 1;
 export async function updateUserBalance(socket: Socket, newBalance: number): Promise<void> {
   const balanceKey = `user:${socket.data.userInfo.user_id}:${socket.data.userInfo.operatorId}`;
   const formattedBalance = newBalance.toFixed(DECIMAL_PLACES);
-
+  const redisClient = getRedisClient()
   await redisClient.hset(balanceKey, 'balance', formattedBalance);
 
   void logInfo(`Balance updated - UserID: ${socket.data.userInfo.user_id}, NewBalance: ${formattedBalance}`);
@@ -67,7 +71,7 @@ export function createDebitObject(betAmount: number, debitTxnId: string, socket:
     ip: socket.handshake.address || 'unknown',
     game_id: Number(gameId),
     user_id: userId,
-    description: `${betAmount} debited for Forest Fortune Round ${matchId}`,
+    description: `${betAmount.toFixed(DECIMAL_PLACES)} Debited for Forest Arrow Game for Round Id ${matchId}`,
     bet_id: `BT:${matchId}:${socket.data.userInfo.operatorId}:${socket.data.userInfo.user_id}`,
     txn_type: DEBIT_TXN_TYPE,
   };
@@ -81,7 +85,7 @@ export function createCreditObject(winAmount: number, creditTxnId: string, socke
     game_id: socket.data.userInfo.gameId,
     user_id: decodeURIComponent(socket.data.userInfo.user_id),
     txn_ref_id: debitTxnId,
-    description: `${winAmount} credited for Forest Fortune Round ${matchId}`,
+    description: `${winAmount.toFixed(DECIMAL_PLACES)} Credited for Forest Arrow Game for Round Id ${matchId}`,
     txn_type: CREDIT_TXN_TYPE,
   };
 }
@@ -91,7 +95,9 @@ export async function processWinTransaction(creditObj: CreditObj, socket: Socket
   //get redis key
   const redisKey = `BT:${socket.data.userInfo.user_id}:${socket.data.userInfo.operatorId}:${matchId}`;
   //add creditobj in redis
+  const redisClient = getRedisClient()
   await redisClient.hset(redisKey, 'winAmount', String(creditObj.amount))
+  await redisClient.hset(redisKey, 'creditTxnId', String(creditObj.txn_id))
   await sendToQueue('', 'games_cashout', JSON.stringify({ ...creditObj, operatorId: socket.data.userInfo.operatorId, token }));
   // void logInfo(`Credit transaction queued - creditData: ${creditObj} , operatorId: ${socket.data.userInfo.operatorId} , token: ${token}`);
   void logCashout(`Credit transaction ${JSON.stringify(creditObj)}`)
@@ -117,114 +123,6 @@ export async function saveGameHistory(socket: Socket, debitObj: DebitObj, matchI
   });
 
   void logInfo(`Game history saved - MatchID: ${matchId}, Result: ${result}, WinAmount: ${winAmount}`);
-}
-
-interface SaveBetInput {
-  userId: string;
-  betId: string;
-  matchId: string;
-  operatorId: string;
-  betAmount: number;
-  betData: BetObj;
-  betStatus: string;
-  betRequest: DebitObj;
-  // betResponse: string;
-  betTxnId: string;
-  isDeclared: boolean;
-  resultStatus: string;
-}
-
-export async function saveBetToDB(data: SaveBetInput): Promise<void> {
-  const query = `
-    INSERT INTO bet (
-      userId, betId, matchId, operatorId, betAmount, betData, betStatus,
-      betRequest, betTxnId, isDeclared, resultStatus, createdAt, updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-  `;
-
-  const values = [
-    data.userId,
-    data.betId,
-    data.matchId,
-    data.operatorId,
-    data.betAmount,
-    JSON.stringify(data.betData),
-    data.betStatus,
-    JSON.stringify(data.betRequest),
-    // data.betResponse,
-    data.betTxnId,
-    data.isDeclared ? 1 : 0,
-    data.resultStatus,
-  ];
-
-  try {
-    await pool.query(query, values);
-    console.log('Bet saved to database.');
-  } catch (error) {
-    console.error('Error saving bet to DB:', error);
-    throw new Error('DB_INSERT_FAILED');
-  }
-}
-
-interface UpdateBetResultParams {
-  betId: string;
-  betResponse: string;
-  betStatus?: string;
-  isDeclared?: boolean;
-  result?: object;
-  resultStatus?: ResultEnum;
-  resultTxnId?: string;
-  winAmount?: number;
-}
-
-export async function updateBetResult(params: UpdateBetResultParams): Promise<void> {
-  try {
-    const fields: string[] = [];
-    const values: any[] = [];
-
-    // Dynamically add fields if provided
-    if (params.betStatus) {
-      fields.push('betStatus = ?');
-      values.push(params.betStatus);
-    }
-    if (params.betResponse) {
-      fields.push('BetResponse = ?');
-      values.push(params.betResponse);
-    }
-    if (typeof params.isDeclared !== 'undefined') {
-      fields.push('isDeclared = ?');
-      values.push(params.isDeclared);
-    }
-
-    if (params.result) {
-      fields.push('result = ?');
-      values.push(JSON.stringify(params.result));
-    }
-
-    if (params.resultStatus) {
-      fields.push('resultStatus = ?');
-      values.push(params.resultStatus);
-    }
-
-    if (params.resultTxnId) {
-      fields.push('resultTxnId = ?');
-      values.push(params.resultTxnId);
-    }
-
-    if (typeof params.winAmount !== 'undefined') {
-      fields.push('winAmount = ?');
-      values.push(params.winAmount);
-    }
-
-    // Add WHERE clause
-    const sql = `UPDATE bet SET ${fields.join(', ')} WHERE betId = ?`;
-    values.push(params.betId);
-
-    await pool.query(sql, values);
-  } catch (error) {
-    console.error('Error updating bet:', error);
-    throw new Error('DB_UPDATE_FAILED');
-  }
 }
 
 export function emitThrowResult(socket: Socket, response: ArrowGameResponse): void {
@@ -258,6 +156,7 @@ export async function disconnectPreviousSocket(
   io: Server
 ): Promise<void> {
   const redisKey = `user:${userId}:${operatorId}`;
+  const redisClient = getRedisClient()
   const previousSocketId = await redisClient.hget(redisKey, 'socket');
 
   if (previousSocketId && typeof previousSocketId === 'string') {
@@ -265,15 +164,15 @@ export async function disconnectPreviousSocket(
     if (previousSocket && previousSocket.connected) {
       emitSocketMessage({
         socket: previousSocket,
-        eventName: EVENT_TYPES.Error,
-        data: 'You have been logged out due to a new connection.',
+        eventName: EVENT_TYPES.useranotherwindow,
+        data: 'user is connected using another window.',
       });
       previousSocket.disconnect();
     }
   }
 }
 
-export const rollBackTransaction = async (data:any) => {
+export const rollBackTransaction = async (data: any) => {
   const { txn_id, betAmount, userId, matchId } = data
   const clientServerOptions = {
     method: "GET",
@@ -283,7 +182,7 @@ export const rollBackTransaction = async (data:any) => {
 
   try {
     const result = await axios(clientServerOptions);
-    logThirtParty(
+    void logThirtParty(
       JSON.stringify({
         req: `Debit Transaction ID:- ${txn_id} ,userId:- ${userId}, matchId:- ${matchId}`,
         res: result?.data
@@ -296,8 +195,8 @@ export const rollBackTransaction = async (data:any) => {
     };
   } catch (err) {
     // const response = err.response ? err.response.data : "Something went wrong";
-     const response = parseError(err);
-    logFailedThirtParty(
+    const response = parseError(err);
+    void logFailedThirtParty(
       JSON.stringify({ req: { txn_id, betAmount, userId, matchId }, res: response })
     );
 
@@ -310,13 +209,14 @@ export const rollBackTransaction = async (data:any) => {
 export const gameDetails = async () => {
   try {
     const data = await axios.get(
-      `${config.SERVICE_BASE_URL}/service/game/detail?rd_url=${config.BACKEND_URL}/`,
+      `${config.SERVICE_BASE_URL}/service/game/detail?rd_url=${config.BACKEND_URL}`,
     );
-    const gameData = data.data
+    const gameData = data.data;
+    void logInfo(`Game Data recieved:${JSON.stringify(gameData)}`)
     return gameData;
   } catch (err) {
     console.error(err)
-    logError(`${err}`);
+    void logError(`${err}`);
     return false;
   }
 };
