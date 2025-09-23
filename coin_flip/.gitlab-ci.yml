@@ -1,0 +1,8 @@
+deploy:
+  stage: deploy
+  before_script:
+    - mkdir -p ~/.ssh
+    - echo "$STAGGINGGAME_PEM" > ~/.ssh/stagginggame.pem
+    - chmod 600 ~/.ssh/stagginggame.pem
+  script:
+    - ssh -o StrictHostKeyChecking=no -i ~/.ssh/stagginggame.pem ubuntu@13.215.183.144 "cd /home/ubuntu && bash forest.sh"
