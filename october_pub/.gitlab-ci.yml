@@ -1,0 +1,8 @@
+deploy:
+  stage: deploy
+  before_script:
+    - mkdir -p ~/.ssh
+    - echo "$test_pem" > ~/.ssh/test.pem
+    - chmod 600 ~/.ssh/test.pem
+  script:
+    - ssh -o StrictHostKeyChecking=no -i ~/.ssh/test.pem ubuntu@13.235.24.212 "cd /home/ubuntu && bash oct.sh"

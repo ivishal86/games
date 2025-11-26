@@ -1,0 +1,41 @@
+`CREATE TABLE `teen_patti`.`bets` (
+    id INT AUTO_INCREMENT UNIQUE,
+    bet_id VARCHAR(100) PRIMARY KEY,
+    match_id CHAR(36) NOT NULL,
+    user_id CHAR(36) NOT NULL,
+    operator_id CHAR(36) NOT NULL,
+    bet_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    bet_data TEXT DEFAULT NULL,
+    bet_status VARCHAR(50) DEFAULT 'pending',
+    bet_request TEXT,
+    bet_response TEXT,
+    bet_txn_id CHAR(36),
+    is_declared BOOLEAN DEFAULT FALSE,
+    result TEXT,
+    result_request TEXT,
+    result_status VARCHAR(50),
+    result_txn_id CHAR(36),
+    win_amount DECIMAL(10, 2) DEFAULT 0.00,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+`
+
+`ALTER TABLE `teen_patti`.`bets` 
+ADD INDEX `inx_bet_id` (`bet_id` ASC) INVISIBLE,
+ADD INDEX `inx_match_id` (`match_id` ASC) INVISIBLE,
+ADD INDEX `inx_user_id` (`user_id` ASC) INVISIBLE,
+ADD INDEX `inx_operator_id` (`operator_id` ASC) VISIBLE,
+ADD INDEX `inx_bet_amount` (`bet_amount` ASC) INVISIBLE,
+ADD INDEX `inx_bet_data` (`bet_data` (150)) INVISIBLE,
+ADD INDEX `inx_bet_status` (`bet_status` ASC) INVISIBLE,
+ADD INDEX `inx_bet_request` (`bet_request` (150)) INVISIBLE,
+ADD INDEX `inx_bet_response` (`bet_response` (150)) INVISIBLE,
+ADD INDEX `inx_bet_txn_id` (`bet_txn_id` ASC) INVISIBLE,
+ADD INDEX `inx_result_request` (`result_request` (150)) INVISIBLE,
+ADD INDEX `inx_is_declared` (`is_declared` ASC) INVISIBLE,
+ADD INDEX `inx_result_status` (`result_status` ASC) INVISIBLE,
+ADD INDEX `inx_result_txn_id` (`result_txn_id` ASC) INVISIBLE,
+ADD INDEX `inx_result` (`result` (150)) INVISIBLE,
+ADD INDEX `inx_win_amount` (`win_amount` ASC) INVISIBLE,
+ADD INDEX `inx_created_at` (`created_at` ASC) VISIBLE;`
